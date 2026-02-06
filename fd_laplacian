@@ -1,0 +1,9 @@
+def laplacian_fd(self, p: np.ndarray) -> np.ndarray:
+    out = np.zeros_like(p)
+    dx2 = self.dx * self.dx
+    dz2 = self.dz * self.dz
+    out[1:-1, 1:-1] = (
+        (p[1:-1, 2:] - 2*p[1:-1, 1:-1] + p[1:-1, :-2]) / dx2 +
+        (p[2:, 1:-1] - 2*p[1:-1, 1:-1] + p[:-2, 1:-1]) / dz2
+    )
+    return out
