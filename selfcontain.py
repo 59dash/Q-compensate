@@ -93,7 +93,76 @@ source_locations = np.empty((nshots, 2), dtype=np.float32)
 source_locations[0, 0] = model.domain_size[0] * 0.5
 print(f" source_locations is in : {source_locations}")
 mute_samples = int(200 / model0.critical_dt)
+def ForwardOperator(model, geometry, kernel='sls'):
+    m = model.m
+    b = model.b
+    qp = model.qp
+    damp = model.damp
+    rho = 1. / b
+    f0 = geometry._f0
+    dt = model.critical_dt
 
+    p = p or TimeFunction(name="p", grid=model.grid,
+                              time_order=2, space_order=SO,
+                              staggered=NODE)
+    s = model.grid.stepping_dim.spacing
+    t0 = p.indices[0] - s / 2
+
+    extra_eqs = []
+
+    r = None
+    if kernel == 'sls':
+        t_s = (sp.sqrt(1. + 1./qp**2) - 1./qp) / f0
+        t_ep = 1. / (f0**2 * t_s)
+        tt = (t_ep / t_s) - 1.
+ 
+        r = TimeFunction(name='r', grid=model.grid, time_order=2,
+                         space_order=SO, staggered=NODE)
+ 
+        # Attenuation memory variable
+        pde_r = r.dt - (tt / t_s) * rho * \
+            div(b * grad(p, shift=.5), shift=-.5) + (1. / t_s) * r
+        u_r = Eq(r.forward, damp * solve(pde_r, r.forward))
+ 
+        # Pressure
+        pde_p = m * p.dt2 - rho * (1. + tt) * \
+            div(b * grad(p, shift=.5), shift=-.5) + \
+            r.forward + (1 - damp) * p.dt
+        u_p = Eq(p.forward, damp * solve(pde_p, p.forward))
+ 
+        extra_eqs = [u_r]
+        stencil = u_p
+ 
+    elif kernel == 'kv':
+        w0 = 2. * np.pi * f0
+        tau = 1 / (w0 * qp)
+ 
+        pde_p = m * p.dt2 - rho * \
+            div(b * grad(p, shift=.5), shift=-.5) - \
+            tau * rho * div(b * grad(p.dt(x0=t0), shift=.5), shift=-.5) + \
+            (1 - damp) * p.dt
+        stencil = Eq(p.forward, solve(pde_p, p.forward))
+ 
+    elif kernel == 'maxwell':
+        w0 = 2. * np.pi * f0
+ 
+        pde_p = m * p.dt2 - rho * \
+            div(b * grad(p, shift=.5), shift=-.5) + \
+            m * w0 / qp * p.dt(x0=t0) + (1 - damp) * p.dt
+        stencil = Eq(p.forward, solve(pde_p, p.forward))
+    
+    src = geometry.src
+    rec = geometry.rec
+    dt_sym = model.grid.time_dim.spacing
+    scale = dt_sym**2 / m
+ 
+    src_term = src.inject(field=p.forward, expr=src * scale)
+    rec_term = rec.interpolate(expr=p)
+ 
+    op = Operator(extra_eqs + [stencil] + src_term + rec_term,
+                  subs=model.spacing_map, name=f'Forward_{kernel}')
+ 
+    return op, p, rec, r
 # Viscoacoustic ImagingOperator — adjoint per kernel
 
 def ImagingOperator(model, geometry, image, kernel='sls'):
